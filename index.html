@@ -571,7 +571,7 @@
     let countiesGeoData = { type: 'FeatureCollection', features: [] };
     const bloomGeoJsonPath = './landcover.geojson';
     // County boundaries are loaded from Supabase/PostGIS.
-    const COUNTY_TABLE = 'county_boundaries';
+    const COUNTY_TABLE = 'counties';
     const COUNTY_ID_COLUMN = 'id';
     const COUNTY_NAME_COLUMN = 'name';
     const COUNTY_GEOMETRY_COLUMN = 'geom';
@@ -1631,7 +1631,7 @@ function updateCountyLabelSizes() {
         console.error('Failed to load map data:', error);
         showError(
           'Could not load the map data. Confirm apiaries.json and landcover.geojson are available, ' +
-          'and that the Supabase county_boundaries table and RLS policy are configured. ' +
+          'and that the Supabase counties table and RLS policy are configured. ' +
           'Details: ' + error.message
         );
       }
