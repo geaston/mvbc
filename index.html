@@ -387,8 +387,8 @@
 
     // Supabase auth settings.
     // Replace these two values with your own Supabase project URL and anon public key.
-    const SUPABASE_URL = 'https://pnxzuufixuaahejmwlws.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_4pKGagaeUFSMgp16qcCZzA_kTsmGSVl';
+    const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+    const SUPABASE_ANON_KEY = 'YOUR-SUPABASE-ANON-KEY';
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     const authScreen = document.getElementById('authScreen');
@@ -570,7 +570,11 @@
     let bloomAreaData = { type: 'FeatureCollection', features: [] };
     let countiesGeoData = { type: 'FeatureCollection', features: [] };
     const bloomGeoJsonPath = './landcover.geojson';
-    const countiesGeoJsonPath = './new-york-counties.geojson';
+    // County boundaries are loaded from Supabase/PostGIS.
+    const COUNTY_TABLE = 'county_boundaries';
+    const COUNTY_ID_COLUMN = 'id';
+    const COUNTY_NAME_COLUMN = 'name';
+    const COUNTY_GEOMETRY_COLUMN = 'geom';
 
     const dcaHotspots = [
       { id: 'dca-1', name: 'Esperance Ridge Gap', lat: 42.774, lng: -74.262, confidence: 'high', terrainCue: 'ridge gap / open saddle', notes: 'Open gap between wooded edges with room for drone flight loops.' },
@@ -1520,33 +1524,102 @@ function updateCountyLabelSizes() {
       renderFilteredApiaries();
     }
 
+    async function loadCountiesFromSupabase() {
+      const selectColumns = [
+        COUNTY_ID_COLUMN,
+        COUNTY_NAME_COLUMN,
+        COUNTY_GEOMETRY_COLUMN
+      ].join(',');
+
+      const { data, error } = await supabaseClient
+        .from(COUNTY_TABLE)
+        .select(selectColumns);
+
+      if (error) {
+        throw new Error('County database query failed: ' + error.message);
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error('County database query did not return an array.');
+      }
+
+      const features = data
+        .map(row => {
+          let geometry = row[COUNTY_GEOMETRY_COLUMN];
+
+          if (typeof geometry === 'string') {
+            try {
+              geometry = JSON.parse(geometry);
+            } catch (error) {
+              console.warn('Skipping county with invalid geometry JSON:', row, error);
+              return null;
+            }
+          }
+
+          if (!geometry || !geometry.type || !geometry.coordinates) {
+            console.warn('Skipping county with missing geometry:', row);
+            return null;
+          }
+
+          const countyName =
+            row[COUNTY_NAME_COLUMN] ||
+            row.NAME ||
+            row.name ||
+            row.county ||
+            row.County ||
+            'County';
+
+          return {
+            type: 'Feature',
+            id: row[COUNTY_ID_COLUMN],
+            properties: {
+              id: row[COUNTY_ID_COLUMN],
+              name: countyName,
+              NAME: countyName
+            },
+            geometry
+          };
+        })
+        .filter(Boolean);
+
+      return {
+        type: 'FeatureCollection',
+        features
+      };
+    }
+
     async function loadData() {
       try {
-        const [apiaryResponse, bloomResponse, countiesResponse] = await Promise.all([
+        const [apiaryResponse, bloomResponse, countiesGeoJson] = await Promise.all([
           fetch('./apiaries.json'),
           fetch(bloomGeoJsonPath),
-          fetch(countiesGeoJsonPath)
+          loadCountiesFromSupabase()
         ]);
 
-        if (!apiaryResponse.ok) throw new Error('HTTP ' + apiaryResponse.status + ' while loading apiaries.json');
-        if (!bloomResponse.ok) throw new Error('HTTP ' + bloomResponse.status + ' while loading ' + bloomGeoJsonPath);
-        if (!countiesResponse.ok) throw new Error('HTTP ' + countiesResponse.status + ' while loading ' + countiesGeoJsonPath);
+        if (!apiaryResponse.ok) {
+          throw new Error('HTTP ' + apiaryResponse.status + ' while loading apiaries.json');
+        }
+        if (!bloomResponse.ok) {
+          throw new Error('HTTP ' + bloomResponse.status + ' while loading ' + bloomGeoJsonPath);
+        }
 
         const apiaries = await apiaryResponse.json();
         const bloomGeoJson = await bloomResponse.json();
-        const countiesGeoJson = await countiesResponse.json();
 
-        if (!Array.isArray(apiaries)) throw new Error('apiaries.json must contain a JSON array.');
+        if (!Array.isArray(apiaries)) {
+          throw new Error('apiaries.json must contain a JSON array.');
+        }
         if (!bloomGeoJson || bloomGeoJson.type !== 'FeatureCollection' || !Array.isArray(bloomGeoJson.features)) {
           throw new Error('Bloom GeoJSON must be a FeatureCollection.');
         }
         if (!countiesGeoJson || countiesGeoJson.type !== 'FeatureCollection' || !Array.isArray(countiesGeoJson.features)) {
-          throw new Error('County GeoJSON must be a FeatureCollection.');
+          throw new Error('County database query must produce a GeoJSON FeatureCollection.');
         }
 
         loadedApiaries = apiaries;
         bloomAreaData = bloomGeoJson;
         countiesGeoData = countiesGeoJson;
+
         loadCustomBloomPolygons();
         renderCountyBaseLayer();
         loadCustomBloomData();
@@ -1556,7 +1629,11 @@ function updateCountyLabelSizes() {
         refreshView();
       } catch (error) {
         console.error('Failed to load map data:', error);
-        showError('Check that apiaries.json, landcover.geojson, and new-york-counties.geojson are in the same folder as index.html.');
+        showError(
+          'Could not load the map data. Confirm apiaries.json and landcover.geojson are available, ' +
+          'and that the Supabase county_boundaries table and RLS policy are configured. ' +
+          'Details: ' + error.message
+        );
       }
     }
 
